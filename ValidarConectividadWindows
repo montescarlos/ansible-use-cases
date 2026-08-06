@@ -1,0 +1,16 @@
+---
+- name: Validar conectividad con Windows
+  hosts: windows
+  gather_facts: false
+
+  tasks:
+    - name: Probar conexión WinRM
+      ansible.windows.win_ping:
+
+    - name: Consultar hostname
+      ansible.windows.win_command: hostname
+      register: resultado_hostname
+
+    - name: Mostrar hostname
+      ansible.builtin.debug:
+        var: resultado_hostname.stdout
