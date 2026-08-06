@@ -1,6 +1,6 @@
 ---
 - name: Validar conectividad con Windows
-  hosts: windows
+  hosts: all
   gather_facts: false
 
   tasks:
