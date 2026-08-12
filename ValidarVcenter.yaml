@@ -1,0 +1,19 @@
+---
+- name: Verificar community.vmware
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+
+    - name: Consultar informacion de vCenter
+      community.vmware.vmware_about_info:
+        hostname: "{{ lookup('env', 'VMWARE_HOST') }}"
+        username: "{{ lookup('env', 'VMWARE_USER') }}"
+        password: "{{ lookup('env', 'VMWARE_PASSWORD') }}"
+        validate_certs: false
+
+      register: vcenter_info
+
+    - name: Mostrar informacion
+      ansible.builtin.debug:
+        var: vcenter_info
