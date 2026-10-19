@@ -23,7 +23,7 @@
           - vm_cpu | int <= 16
           - vm_ram | int >= 2
           - vm_ram | int <= 64
-          - vm_disk | int >= 1
+          - vm_disk | int >= 200
         fail_msg: "Parametros de aprovisionamiento invalidos"
 
     - name: Desplegar maquina virtual
