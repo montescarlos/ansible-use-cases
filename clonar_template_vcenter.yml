@@ -1,20 +1,55 @@
+
 ---
-- name: Diagnosticar ubicacion de plantilla VMware
+- name: UC-01 - Aprovisionamiento de VM VMware
   hosts: localhost
   connection: local
   gather_facts: false
 
-  tasks:
-    - name: Consultar informacion de la plantilla
-      community.vmware.vmware_guest_info:
-        datacenter: MOS
-        name: TPL-WIN2022-ANSIBLE
-      register: template_info
+  vars:
+    vm_template: "TPL-WIN2022-ANSIBLE"
+    vm_datacenter: "MOS"
+    vm_esxi: "esx01.mos.com.ec"
+    vm_datastore: "ESX01SSD02"
+    vm_folder: "/MOS/vm/POC"
+    vm_network: "VM Network"
 
-    - name: Mostrar datos relevantes
+  tasks:
+    - name: Validar parametros del Survey
+      ansible.builtin.assert:
+        that:
+          - vm_name is defined
+          - vm_name | length > 0
+          - vm_cpu | int >= 1
+          - vm_cpu | int <= 16
+          - vm_ram | int >= 2
+          - vm_ram | int <= 64
+          - vm_disk | int >= 200
+        fail_msg: "Parametros de aprovisionamiento invalidos"
+
+    - name: Desplegar maquina virtual
+      community.vmware.vmware_guest:
+        datacenter: "{{ vm_datacenter }}"
+        esxi_hostname: "{{ vm_esxi }}"
+        datastore: "{{ vm_datastore }}"
+        folder: "{{ vm_folder }}"
+        name: "{{ vm_name }}"
+        template: "{{ vm_template }}"
+        state: poweredon
+
+        hardware:
+          num_cpus: "{{ vm_cpu | int }}"
+          memory_mb: "{{ vm_ram | int * 1024 }}"
+
+        networks:
+          - name: "{{ vm_network }}"
+
+      register: deploy_result
+
+    - name: Mostrar resultado
       ansible.builtin.debug:
         msg:
-          - "Host: {{ template_info.instance.hw_esxi_host }}"
-          - "Carpeta: {{ template_info.instance.hw_folder }}"
-          - "Datastore: {{ template_info.instance.hw_datastores }}"
-          - "Ruta VMX: {{ template_info.instance.hw_files }}"
+          - "VM: {{ vm_name }}"
+          - "CPU: {{ vm_cpu }}"
+          - "RAM: {{ vm_ram }} GB"
+          - "Disco solicitado: {{ vm_disk }} GB"
+          - "Estado: {{ deploy_result.instance.hw_power_status }}"
