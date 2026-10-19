@@ -40,9 +40,6 @@
           num_cpus: "{{ vm_cpu | int }}"
           memory_mb: "{{ vm_ram | int * 1024 }}"
 
-        disk:
-          - size_gb: "{{ vm_disk | int }}"
-
         networks:
           - name: "{{ vm_network }}"
 
