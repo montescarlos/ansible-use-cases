@@ -46,7 +46,7 @@
           - vm_admin_password | length > 0
         fail_msg: "Parametros de aprovisionamiento invalidos"
         success_msg: "Parametros del Survey validados correctamente"
-      no_log: true
+
 
     - name: Desplegar maquina virtual
       community.vmware.vmware_guest:
