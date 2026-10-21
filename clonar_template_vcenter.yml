@@ -83,6 +83,7 @@
           hostname: "{{ vm_hostname }}"
           joinworkgroup: WORKGROUP
           password: "{{ vm_admin_password }}"
+          timezone: "045"
 
         wait_for_customization: true
         wait_for_customization_timeout: 1800
