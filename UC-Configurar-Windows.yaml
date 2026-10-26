@@ -28,33 +28,33 @@
     # 2. AMPLIACION DE PARTICION C
     # ==========================================
 
-    - name: Ampliar particion C
-      ansible.windows.win_powershell:
-        error_action: stop
-        script: |
-          $partition = Get-Partition -DriveLetter C
-          $supported = Get-PartitionSupportedSize -DriveLetter C
+#    - name: Ampliar particion C
+#      ansible.windows.win_powershell:
+#        error_action: stop
+#        script: |
+#          $partition = Get-Partition -DriveLetter C
+#          $supported = Get-PartitionSupportedSize -DriveLetter C
 
-          $before = $partition.Size
-          $maximum = $supported.SizeMax
+#          $before = $partition.Size
+#          $maximum = $supported.SizeMax
 
-          $Ansible.Changed = $false
+ #         $Ansible.Changed = $false
 
-          if (($maximum - $before) -gt 100MB) {
-              Resize-Partition -DriveLetter C `
-                  -Size $maximum -ErrorAction Stop
+#          if (($maximum - $before) -gt 100MB) {
+#              Resize-Partition -DriveLetter C `
+#                  -Size $maximum -ErrorAction Stop
 
-              $Ansible.Changed = $true
-          }
+#              $Ansible.Changed = $true
+#          }
 
-          $after = (Get-Partition -DriveLetter C).Size
+#          $after = (Get-Partition -DriveLetter C).Size
 
-          $Ansible.Result = @{
-              BeforeGB = [math]::Round($before / 1GB, 2)
-              AfterGB = [math]::Round($after / 1GB, 2)
-              MaximumGB = [math]::Round($maximum / 1GB, 2)
-          }
-      register: disk_result
+#          $Ansible.Result = @{
+#              BeforeGB = [math]::Round($before / 1GB, 2)
+#              AfterGB = [math]::Round($after / 1GB, 2)
+#              MaximumGB = [math]::Round($maximum / 1GB, 2)
+#          }
+#      register: disk_result
 
     # ==========================================
     # 3. DESCRIPCION DEL SERVIDOR
