@@ -1,0 +1,343 @@
+
+---
+- name: UC-01 - Postconfiguracion Windows Server
+  hosts: all
+  gather_facts: false
+
+  vars:
+    rdp_allowed_sources: "Any"
+
+  tasks:
+
+    # ==========================================
+    # 1. VALIDACION DE PARAMETROS
+    # ==========================================
+
+    - name: Validar parametros de Active Directory
+      ansible.builtin.assert:
+        that:
+          - vm_domain is defined
+          - vm_domain | length > 0
+          - vm_domain_user is defined
+          - vm_domain_user | length > 0
+          - vm_domain_password is defined
+          - vm_domain_password | length > 0
+        fail_msg: "Faltan parametros del dominio"
+
+    # ==========================================
+    # 2. AMPLIACION DE PARTICION C
+    # ==========================================
+
+    - name: Ampliar particion C
+      ansible.windows.win_powershell:
+        error_action: stop
+        script: |
+          $partition = Get-Partition -DriveLetter C
+          $supported = Get-PartitionSupportedSize -DriveLetter C
+
+          $before = $partition.Size
+          $maximum = $supported.SizeMax
+
+          $Ansible.Changed = $false
+
+          if (($maximum - $before) -gt 100MB) {
+              Resize-Partition -DriveLetter C `
+                  -Size $maximum -ErrorAction Stop
+
+              $Ansible.Changed = $true
+          }
+
+          $after = (Get-Partition -DriveLetter C).Size
+
+          $Ansible.Result = @{
+              BeforeGB = [math]::Round($before / 1GB, 2)
+              AfterGB = [math]::Round($after / 1GB, 2)
+              MaximumGB = [math]::Round($maximum / 1GB, 2)
+          }
+      register: disk_result
+
+    # ==========================================
+    # 3. DESCRIPCION DEL SERVIDOR
+    # ==========================================
+
+    - name: Configurar descripcion del sistema
+      ansible.windows.win_powershell:
+        error_action: stop
+        parameters:
+          Description: "{{ vm_description | default('Servidor Windows administrado por AWX', true) }}"
+        script: |
+          param([string]$Description)
+
+          $os = Get-CimInstance Win32_OperatingSystem
+
+          $Ansible.Changed = $false
+
+          if ($os.Description -ne $Description) {
+              $os | Set-CimInstance -Property @{
+                  Description = $Description
+              }
+              $Ansible.Changed = $true
+          }
+
+    - name: Configurar descripcion del servidor en Windows
+      ansible.windows.win_regedit:
+        path: HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters
+        name: srvcomment
+        data: "{{ vm_description | default('Servidor Windows administrado por AWX', true) }}"
+        type: string
+
+    # ==========================================
+    # 4. HABILITAR ESCRITORIO REMOTO
+    # ==========================================
+
+    - name: Habilitar RDP
+      ansible.windows.win_regedit:
+        path: HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server
+        name: fDenyTSConnections
+        data: 0
+        type: dword
+
+    - name: Habilitar Network Level Authentication
+      ansible.windows.win_regedit:
+        path: HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp
+        name: UserAuthentication
+        data: 1
+        type: dword
+
+    # ==========================================
+    # 5. SERVICIO REMOTE DESKTOP
+    # ==========================================
+
+    - name: Configurar servicio Remote Desktop
+      ansible.windows.win_service:
+        name: TermService
+        start_mode: auto
+        state: started
+
+    # ==========================================
+    # 6. FIREWALL RDP
+    # ==========================================
+
+    - name: Configurar reglas de firewall RDP
+      ansible.windows.win_powershell:
+        error_action: stop
+        parameters:
+          AllowedSources: "{{ rdp_allowed_sources }}"
+        script: |
+          param([string]$AllowedSources)
+
+          $rules = @(
+              "RemoteDesktop-UserMode-In-TCP",
+              "RemoteDesktop-UserMode-In-UDP"
+          )
+
+          $Ansible.Changed = $false
+
+          foreach ($ruleName in $rules) {
+
+              $rule = Get-NetFirewallRule `
+                  -Name $ruleName -ErrorAction Stop
+
+              $filter = Get-NetFirewallAddressFilter `
+                  -AssociatedNetFirewallRule $rule
+
+              $profiles = [string]$rule.Profile
+              $sources = @($filter.RemoteAddress) -join ","
+
+              $needsChange = (
+                  $rule.Enabled -ne "True" -or
+                  $rule.Action -ne "Allow" -or
+                  $profiles -notmatch "Domain" -or
+                  $profiles -notmatch "Private" -or
+                  $profiles -match "Public" -or
+                  $sources -ne $AllowedSources
+              )
+
+              if ($needsChange) {
+                  Set-NetFirewallRule `
+                      -Name $ruleName `
+                      -Enabled True `
+                      -Action Allow `
+                      -Profile Domain,Private `
+                      -RemoteAddress $AllowedSources
+
+                  $Ansible.Changed = $true
+              }
+          }
+
+    # ==========================================
+    # 7. CONFIGURACION DE ENERGIA
+    # ==========================================
+
+    - name: Deshabilitar suspension automatica
+      ansible.windows.win_powershell:
+        error_action: stop
+        script: |
+          $output = powercfg.exe /getactivescheme |
+              Out-String
+
+          $match = [regex]::Match(
+              $output,
+              '[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}'
+          )
+
+          if (-not $match.Success) {
+              throw "No se pudo identificar el plan de energia"
+          }
+
+          $scheme = $match.Value
+
+          $sub = "238c9fa8-0aad-41ed-83f4-97be242c8f20"
+          $setting = "29f6c1db-86da-48c5-9fdb-f2b67b1f44da"
+
+          $path = "HKLM:\SYSTEM\CurrentControlSet\Control\Power\User\PowerSchemes\$scheme\$sub\$setting"
+
+          $current = $null
+
+          if (Test-Path $path) {
+              $current = (Get-ItemProperty $path).ACSettingIndex
+          }
+
+          $Ansible.Changed = $false
+
+          if ($null -eq $current -or $current -ne 0) {
+
+              powercfg.exe /setacvalueindex `
+                  $scheme $sub $setting 0
+
+              if ($LASTEXITCODE -ne 0) {
+                  throw "Error configurando suspension"
+              }
+
+              powercfg.exe /setactive $scheme
+
+              if ($LASTEXITCODE -ne 0) {
+                  throw "Error activando plan de energia"
+              }
+
+              $Ansible.Changed = $true
+          }
+
+    # ==========================================
+    # 8. INCORPORACION A ACTIVE DIRECTORY
+    # ==========================================
+
+    - name: Incorporar servidor al dominio
+      ansible.windows.win_powershell:
+        error_action: stop
+        parameters:
+          Domain: "{{ vm_domain }}"
+          OUPath: "{{ vm_domain_ou | default('') }}"
+        sensitive_parameters:
+          - name: DomainCredential
+            username: "{{ vm_domain_user }}"
+            password: "{{ vm_domain_password }}"
+        script: |
+          param(
+              [string]$Domain,
+              [string]$OUPath,
+              [PSCredential]$DomainCredential
+          )
+
+          $computer = Get-CimInstance Win32_ComputerSystem
+          $Ansible.Changed = $false
+
+          if ($computer.PartOfDomain) {
+
+              if ($computer.Domain -ine $Domain) {
+                  throw "El servidor ya pertenece a otro dominio: $($computer.Domain)"
+              }
+
+          }
+          else {
+
+              $joinParams = @{
+                  DomainName  = $Domain
+                  Credential  = $DomainCredential
+                  ErrorAction = "Stop"
+                  Force       = $true
+              }
+
+              if (-not [string]::IsNullOrWhiteSpace($OUPath)) {
+                  $joinParams.OUPath = $OUPath
+              }
+
+              Add-Computer @joinParams
+
+              $Ansible.Changed = $true
+          }
+
+      register: domain_join
+      no_log: true
+
+    # ==========================================
+    # 9. REINICIO DEL SERVIDOR
+    # ==========================================
+
+    - name: Reiniciar despues de incorporar al dominio
+      ansible.windows.win_reboot:
+        reboot_timeout: 900
+        post_reboot_delay: 30
+      when: domain_join.changed
+
+    # ==========================================
+    # 10. VERIFICACION FINAL
+    # ==========================================
+
+    - name: Obtener configuracion final
+      ansible.windows.win_powershell:
+        error_action: stop
+        script: |
+          $computer = Get-CimInstance Win32_ComputerSystem
+          $os = Get-CimInstance Win32_OperatingSystem
+          $volume = Get-Volume -DriveLetter C
+
+          $ips = @(
+              Get-NetIPAddress -AddressFamily IPv4 |
+              Where-Object {
+                  $_.IPAddress -ne "127.0.0.1"
+              } |
+              Select-Object -ExpandProperty IPAddress
+          )
+
+          $dns = @(
+              Get-DnsClientServerAddress -AddressFamily IPv4 |
+              Where-Object {
+                  $_.ServerAddresses.Count -gt 0
+              } |
+              ForEach-Object {
+                  $_.ServerAddresses
+              } |
+              Select-Object -Unique
+          )
+
+          $rdp = Get-ItemProperty `
+              "HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server"
+
+          $nla = Get-ItemProperty `
+              "HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp"
+
+          $Ansible.Changed = $false
+
+          $Ansible.Result = @{
+              Hostname = $env:COMPUTERNAME
+              SistemaOperativo = $os.Caption
+              Dominio = $computer.Domain
+              UnidoDominio = $computer.PartOfDomain
+              Descripcion = $os.Description
+              DireccionesIP = $ips
+              DNSServers = $dns
+              DiscoCGB = [math]::Round($volume.Size / 1GB, 2)
+              EspacioLibreGB = [math]::Round(
+                  $volume.SizeRemaining / 1GB, 2
+              )
+              RDPHabilitado = ($rdp.fDenyTSConnections -eq 0)
+              NLAHabilitado = ($nla.UserAuthentication -eq 1)
+              ServicioRDP = (Get-Service TermService).Status.ToString()
+          }
+
+      register: final_result
+
+    - name: Mostrar resultados del servidor
+      ansible.builtin.debug:
+        var: final_result.result
