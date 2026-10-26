@@ -36,7 +36,7 @@
           $supported = Get-PartitionSupportedSize -DriveLetter C
           $before = $partition.Size
           $maximum = $supported.SizeMax
-         $Ansible.Changed = $false
+          $Ansible.Changed = $false
          if (($maximum - $before) -gt 100MB) {
               Resize-Partition -DriveLetter C `
                   -Size $maximum -ErrorAction Stop
