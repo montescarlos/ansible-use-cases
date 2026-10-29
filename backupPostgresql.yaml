@@ -3,8 +3,8 @@
   hosts: all
   gather_facts: false
   become: true
-  become_method: su
-  become_user: root
+  become_method: sudo
+  become_user: postgres
 
   tasks:
     - name: Respaldar todas las bases de datos
