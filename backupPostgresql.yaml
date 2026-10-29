@@ -1,0 +1,154 @@
+---
+- name: Respaldo logico completo de PostgreSQL en RHEL 9
+  hosts: postgresql
+  gather_facts: false
+  become: true
+
+  vars:
+    pg_backup_dir: /var/backups/postgresql
+    pg_backup_retention_days: 7
+    pg_backup_port: 5432
+    # Dejar vacio para detectar automaticamente. Ejemplo con PGDG:
+    # pg_backup_dumpall_path: /usr/pgsql-16/bin/pg_dumpall
+    pg_backup_dumpall_path: ""
+
+  tasks:
+    - name: Validar parametros del respaldo
+      ansible.builtin.assert:
+        that:
+          - pg_backup_dir is match('^/.+')
+          - pg_backup_retention_days | int >= 1
+          - pg_backup_port | int >= 1
+          - pg_backup_port | int <= 65535
+        fail_msg: Revisar ruta absoluta, retencion y puerto PostgreSQL.
+
+    - name: Verificar que exista el usuario de sistema postgres
+      ansible.builtin.getent:
+        database: passwd
+        key: postgres
+
+    - name: Localizar pg_dumpall en el servidor
+      ansible.builtin.shell: |
+        set -euo pipefail
+        explicit={{ pg_backup_dumpall_path | quote }}
+        if [ -n "$explicit" ]; then
+          test -x "$explicit"
+          printf '%s\n' "$explicit"
+        elif command -v pg_dumpall >/dev/null 2>&1; then
+          command -v pg_dumpall
+        else
+          shopt -s nullglob
+          candidates=(/usr/pgsql-*/bin/pg_dumpall)
+          if [ "${#candidates[@]}" -ne 1 ] || [ ! -x "${candidates[0]}" ]; then
+            echo 'No se pudo detectar una instalacion unica de pg_dumpall. Configure pg_backup_dumpall_path.' >&2
+            exit 1
+          fi
+          printf '%s\n' "${candidates[0]}"
+        fi
+      args:
+        executable: /bin/bash
+      become_user: postgres
+      register: pg_dumpall_detectado
+      changed_when: false
+
+    - name: Consultar version del cliente pg_dumpall
+      ansible.builtin.command:
+        argv:
+          - "{{ pg_dumpall_detectado.stdout }}"
+          - --version
+      become_user: postgres
+      register: pg_cliente_version
+      changed_when: false
+
+    - name: Consultar version del servidor PostgreSQL por socket local
+      ansible.builtin.command:
+        argv:
+          - "{{ pg_dumpall_detectado.stdout | dirname }}/psql"
+          - -X
+          - -A
+          - -t
+          - -c
+          - SHOW server_version;
+      become_user: postgres
+      register: pg_servidor_version
+      changed_when: false
+
+    - name: Crear carpeta de respaldos protegida
+      ansible.builtin.file:
+        path: "{{ pg_backup_dir }}"
+        state: directory
+        owner: postgres
+        group: postgres
+        mode: '0700'
+
+    - name: Obtener marca de tiempo del servidor en UTC
+      ansible.builtin.command:
+        argv:
+          - date
+          - -u
+          - +%Y%m%dT%H%M%S%NZ
+      register: pg_fecha
+      changed_when: false
+
+    - name: Construir nombre del archivo de respaldo
+      ansible.builtin.set_fact:
+        pg_archivo: "{{ pg_backup_dir }}/postgresql_all_{{ pg_fecha.stdout }}.sql.gz"
+
+    - name: Generar y comprobar respaldo comprimido de todas las bases y roles
+      ansible.builtin.shell: |
+        set -euo pipefail
+        umask 077
+        temporal="$(mktemp {{ (pg_backup_dir ~ '/.postgresql_all_XXXXXXXX') | quote }})"
+        trap 'rm -f -- "$temporal"' EXIT
+        {{ pg_dumpall_detectado.stdout | quote }} --no-password --no-role-passwords --port {{ pg_backup_port | int }} | gzip -c > "$temporal"
+        gzip -t -- "$temporal"
+        test -s "$temporal"
+        mv -- "$temporal" {{ pg_archivo | quote }}
+        trap - EXIT
+      args:
+        executable: /bin/bash
+      become_user: postgres
+      register: pg_resultado_backup
+      changed_when: true
+
+    - name: Inspeccionar archivo de respaldo final
+      ansible.builtin.stat:
+        path: "{{ pg_archivo }}"
+      register: pg_estado_archivo
+
+    - name: Confirmar archivo valido, no vacio y con permisos restrictivos
+      ansible.builtin.assert:
+        that:
+          - pg_estado_archivo.stat.exists
+          - pg_estado_archivo.stat.isreg
+          - pg_estado_archivo.stat.size | int > 0
+          - pg_estado_archivo.stat.mode == '0600'
+        fail_msg: El archivo del respaldo no cumple las comprobaciones basicas.
+
+    - name: Localizar respaldos anteriores al periodo de retencion
+      ansible.builtin.find:
+        paths: "{{ pg_backup_dir }}"
+        patterns: 'postgresql_all_*.sql.gz'
+        file_type: file
+        age: "{{ pg_backup_retention_days }}d"
+        recurse: false
+      register: pg_backups_antiguos
+
+    - name: Eliminar respaldos antiguos despues de un backup exitoso
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ pg_backups_antiguos.files }}"
+      loop_control:
+        label: "{{ item.path }}"
+
+    - name: Mostrar resumen de ejecucion en AWX
+      ansible.builtin.debug:
+        msg:
+          - "Servidor PostgreSQL: {{ pg_servidor_version.stdout | trim }}"
+          - "Cliente: {{ pg_cliente_version.stdout | trim }}"
+          - "Respaldo: {{ pg_archivo }}"
+          - "Tamano: {{ pg_estado_archivo.stat.size }} bytes"
+          - "Retencion: {{ pg_backup_retention_days }} dias"
+          - "Respaldos antiguos eliminados: {{ pg_backups_antiguos.matched }}"
+          - "Autenticacion: socket local como usuario postgres; sin contrasenas embebidas"
