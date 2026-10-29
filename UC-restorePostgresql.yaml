@@ -1,0 +1,17 @@
+---
+- name: Restore PostgreSQL
+  hosts: all
+  gather_facts: false
+  become: true
+  become_method: sudo
+  become_user: postgres
+
+  tasks:
+    - name: Restaurar todas las bases de datos
+      ansible.builtin.shell: |
+        set -o pipefail
+        gzip -dc "$BACKUP_FILE" | /bin/psql -X -v ON_ERROR_STOP=0 -d postgres
+      args:
+        executable: /bin/bash
+      environment:
+        BACKUP_FILE: "{{ backup_file }}"
