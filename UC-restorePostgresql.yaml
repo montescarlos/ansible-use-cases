@@ -1,6 +1,5 @@
-
 ---
-- name: Restore PostgreSQL - ultimo backup
+- name: Demo restore PostgreSQL - Empresa a Empresa_Demo
   hosts: all
   gather_facts: false
   become: true
@@ -17,17 +16,47 @@
       register: backups
       failed_when: (backups.matched | default(0) | int) == 0
 
-    - name: Restaurar ultimo backup
+    - name: Restaurar Empresa en una base de demostracion
       ansible.builtin.shell: |
-        set -o pipefail
-        echo "Restaurando: $BACKUP_FILE"
-        gzip -dc "$BACKUP_FILE" | /bin/psql -X -v ON_ERROR_STOP=0 -d postgres
+        set -euo pipefail
+
+        echo "Respaldo seleccionado: $BACKUP_FILE"
+        if /bin/psql -X -At -d postgres -c "SELECT 1 FROM pg_database WHERE datname = 'Empresa_Demo'" | grep -qx 1; then
+          echo 'ERROR: Empresa_Demo ya existe. No se modifica ni se sobrescribe.' >&2
+          exit 1
+        fi
+
+        # Base nueva: nunca se elimina ni se modifica Empresa.
+        /bin/createdb -T template0 Empresa_Demo
+
+        # pg_dumpall contiene varias bases y comandos \connect.
+        # Seleccionar el contenido de Empresa DESPUES de su primer \connect.
+        # No ejecutar CREATE DATABASE Empresa ni comandos globales.
+        gzip -dc "$BACKUP_FILE" | awk '
+          /^-- Database "Empresa" dump$/ { en_empresa=1; next }
+          /^-- Database "/ { if (en_empresa) en_empresa=0; next }
+          en_empresa && /^\\connect[[:space:]]/ {
+            if (iniciado) { print "ERROR: conexion adicional inesperada" > "/dev/stderr"; exit 3 }
+            iniciado=1
+            next
+          }
+          en_empresa && iniciado { print; lineas++ }
+          END {
+            if (!iniciado || lineas == 0) {
+              print "ERROR: no se encontro el contenido de Empresa en el respaldo" > "/dev/stderr"
+              exit 2
+            }
+          }
+        ' | /bin/psql -X -v ON_ERROR_STOP=1 -d Empresa_Demo
+
+        echo 'Registros recuperados en Empresa_Demo:'
+        /bin/psql -X -v ON_ERROR_STOP=1 -d Empresa_Demo -c 'SELECT COUNT(*) FROM public."Personas";'
       args:
         executable: /bin/bash
-      register: restore_result
       environment:
         BACKUP_FILE: "{{ (backups.files | sort(attribute='mtime', reverse=true) | first).path }}"
+      register: resultado
 
-    - name: Mostrar errores PostgreSQL
+    - name: Mostrar resultado en AWX
       ansible.builtin.debug:
-        var: restore_result.stderr_lines  
+        var: resultado.stdout_lines
