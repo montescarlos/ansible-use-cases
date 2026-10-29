@@ -24,5 +24,10 @@
         gzip -dc "$BACKUP_FILE" | /bin/psql -X -v ON_ERROR_STOP=0 -d postgres
       args:
         executable: /bin/bash
+      register: restore_result
       environment:
         BACKUP_FILE: "{{ (backups.files | sort(attribute='mtime', reverse=true) | first).path }}"
+
+    - name: Mostrar errores PostgreSQL
+      ansible.builtin.debug:
+        var: restore_result.stderr_lines  
