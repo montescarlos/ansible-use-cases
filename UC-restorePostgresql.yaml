@@ -1,5 +1,6 @@
+
 ---
-- name: Restore PostgreSQL
+- name: Restore PostgreSQL - ultimo backup
   hosts: all
   gather_facts: false
   become: true
@@ -7,11 +8,21 @@
   become_user: postgres
 
   tasks:
-    - name: Restaurar todas las bases de datos
+    - name: Buscar ultimo backup
+      ansible.builtin.find:
+        paths: /var/backups/postgresql
+        patterns: 'postgresql_*.sql.gz'
+        file_type: file
+        recurse: false
+      register: backups
+      failed_when: (backups.matched | default(0) | int) == 0
+
+    - name: Restaurar ultimo backup
       ansible.builtin.shell: |
         set -o pipefail
+        echo "Restaurando: $BACKUP_FILE"
         gzip -dc "$BACKUP_FILE" | /bin/psql -X -v ON_ERROR_STOP=0 -d postgres
       args:
         executable: /bin/bash
       environment:
-        BACKUP_FILE: "{{ backup_file }}"
+        BACKUP_FILE: "{{ (backups.files | sort(attribute='mtime', reverse=true) | first).path }}"
