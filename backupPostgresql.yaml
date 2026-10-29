@@ -3,6 +3,7 @@
 - name: Backup PostgreSQL
   gather_facts: false
   become: true
+  hosts: all
   become_method: sudo
   become_user: postgres
 
