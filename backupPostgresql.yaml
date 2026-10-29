@@ -1,11 +1,10 @@
-
 ---
 - name: Backup PostgreSQL
+  hosts: all
   gather_facts: false
   become: true
-  hosts: all
-  become_method: sudo
-  become_user: postgres
+  become_method: su
+  become_user: root
 
   tasks:
     - name: Respaldar todas las bases de datos
