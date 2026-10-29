@@ -1,7 +1,6 @@
 
 ---
 - name: Backup PostgreSQL
-  hosts: postgresql
   gather_facts: false
   become: true
   become_method: sudo
